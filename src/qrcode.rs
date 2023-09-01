@@ -29,7 +29,8 @@ pub struct QRCode {
     raw_data: String,
     encoding: QREncoding,
     error_correction: ErrorCorrectionLevel,
-    version: usize
+    version: usize,
+    err_metadata: ErrorCorrectionMetaData,
 }
 
 fn find_encoding(data: &str) -> QREncoding {
@@ -278,11 +279,11 @@ const ERROR_CORRECTION_DATA: [(usize, ErrorCorrectionLevel, [usize; 5]); 160] = 
     (40, ErrorCorrectionLevel::H, [30,20,15,61,16]),
 ];
 
-fn get_data_size(version: usize, error_correction: &ErrorCorrectionLevel) -> Option<&[usize]> {
+fn get_err_metadata(version: usize, error_correction: &ErrorCorrectionLevel) -> Option<ErrorCorrectionMetaData> {
     let current_option = (version, error_correction);
     for option in ERROR_CORRECTION_DATA.iter() {
         if option.0 == current_option.0 && &option.1 == current_option.1 {
-            return Some(&option.2);
+            return Some(ErrorCorrectionMetaData::from(&option.2[..]));
         }
     }
 
@@ -301,7 +302,7 @@ fn encode_numeric(bit_buffer: &mut String, current_slice: &str) {
     };
 }
 
-fn alphanumeric_get_char_code(c: char) -> i32 {
+fn alphanumeric_get_char_code(c: char) -> u16 {
     match c {
     '0' => 0, '1' => 1, '2' => 2, '3' => 3, '4' => 4, '5' => 5,
     '6' => 6, '7' => 7, '8' => 8, '9' => 9, 'A' => 10, 'B' => 11, 
@@ -313,62 +314,58 @@ fn alphanumeric_get_char_code(c: char) -> i32 {
     }
 }
 
-fn encode_alphanumeric(bit_buffer: &mut String, current_slice: &str) {
+fn encode_alphanumeric(current_slice: &str) -> String {
+    let mut iter = current_slice.chars();
+
     if current_slice.len() == 2 {
-        let code1 = alphanumeric_get_char_code(current_slice.chars().nth(0).unwrap());
-        let code2 = alphanumeric_get_char_code(current_slice.chars().nth(1).unwrap());
+        let code1 = alphanumeric_get_char_code(iter.next().unwrap());
+        let code2 = alphanumeric_get_char_code(iter.next().unwrap());
 
         let code = code1 * 45 + code2;
-        bit_buffer.push_str(&format!("{:011b}", code));
+        format!("{:011b}", code)
     } else {
-        bit_buffer.push_str(&format!("{:06b}", alphanumeric_get_char_code(current_slice.chars().nth(0).unwrap())));
+        format!("{:06b}", alphanumeric_get_char_code(iter.next().unwrap()))
     }
 }
 
-fn add_encoding(qrcode: & QRCode, bit_buffer: & mut String) {
+fn get_encoding(qrcode: &QRCode) -> &'static str {
     // add magic number for encoding type
     match qrcode.encoding {
-        QREncoding::Numeric      => bit_buffer.push_str("0001"),
-        QREncoding::AlphaNumeric => bit_buffer.push_str("0010"),
-        QREncoding::Byte         => bit_buffer.push_str("0100"),
-        _                        => bit_buffer.push_str("0000"),
-    };
+        QREncoding::Numeric      => "0001",
+        QREncoding::AlphaNumeric => "0010",
+        QREncoding::Byte         => "0100",
+        _                        => "0000",
+    }
 }
 
-fn add_data_len(qrcode: & QRCode, bit_buffer: & mut String) -> Result<(), QRCodeError> {
-    // add length of data 0 padded to specific lenght
-    match qrcode.version {
+fn get_data_len(qrcode: &QRCode) -> Result<String, QRCodeError> {
+    // lookup length of data 0 padded to specific lenght
+    Ok(match qrcode.version {
         1..=9 => match qrcode.encoding {
-            QREncoding::Numeric      => bit_buffer.push_str(&format!("{:010b}", qrcode.raw_data.len())),
-            QREncoding::AlphaNumeric => bit_buffer.push_str(&format!("{:09b}",  qrcode.raw_data.len())),
-            QREncoding::Byte         => bit_buffer.push_str(&format!("{:08b}",  qrcode.raw_data.len())),
-            _                        => bit_buffer.push_str("0000"),
+            QREncoding::Numeric      => format!("{:010b}", qrcode.raw_data.len()),
+            QREncoding::AlphaNumeric => format!("{:09b}",  qrcode.raw_data.len()),
+            QREncoding::Byte         => format!("{:08b}",  qrcode.raw_data.len()),
+            _                        => "0000".to_owned(),
         },
         10..=26 => match qrcode.encoding {
-            QREncoding::Numeric      => bit_buffer.push_str(&format!("{:012b}",  qrcode.raw_data.len())),
-            QREncoding::AlphaNumeric => bit_buffer.push_str(&format!("{:011b}",  qrcode.raw_data.len())),
-            QREncoding::Byte         => bit_buffer.push_str(&format!("{:016b}",  qrcode.raw_data.len())),
-            _                        => bit_buffer.push_str("0000"),
+            QREncoding::Numeric      => format!("{:012b}",  qrcode.raw_data.len()),
+            QREncoding::AlphaNumeric => format!("{:011b}",  qrcode.raw_data.len()),
+            QREncoding::Byte         => format!("{:016b}",  qrcode.raw_data.len()),
+            _                        => "0000".to_owned(),
         },
         27..=40 => match qrcode.encoding {
-            QREncoding::Numeric      => bit_buffer.push_str(&format!("{:014b}",  qrcode.raw_data.len())),
-            QREncoding::AlphaNumeric => bit_buffer.push_str(&format!("{:013b}",  qrcode.raw_data.len())),
-            QREncoding::Byte         => bit_buffer.push_str(&format!("{:016b}",  qrcode.raw_data.len())),
-            _                        => bit_buffer.push_str("0000"),
+            QREncoding::Numeric      => format!("{:014b}",  qrcode.raw_data.len()),
+            QREncoding::AlphaNumeric => format!("{:013b}",  qrcode.raw_data.len()),
+            QREncoding::Byte         => format!("{:016b}",  qrcode.raw_data.len()),
+            _                        => "0000".to_owned(),
         },
         _ => { return Err(QRCodeError::UnsupportedVersion); }
-    };
-
-    return Ok(());
+    })
 }
 
 fn add_padding(qrcode: &QRCode, bit_buffer: &mut String) -> Result<(), QRCodeError> {
     // get the maximum number of bits
-    let bit_size = match get_data_size(qrcode.version, &qrcode.error_correction) {
-        Some(data) => { ErrorCorrectionMetaData::from(data).total_code_words() * 8 },
-        None => { return Err(QRCodeError::DataSizeMissing); }
-    } as usize;
-    println!("{} {}", bit_size, bit_buffer.len());
+    let bit_size = qrcode.err_metadata.total_code_words();
     let missing_bits = bit_size - bit_buffer.len();
 
     // add terminator of 0s => at most four 0s
@@ -392,7 +389,7 @@ fn add_padding(qrcode: &QRCode, bit_buffer: &mut String) -> Result<(), QRCodeErr
     return Ok(());
 }
 
-fn encode_data(qrcode: & QRCode, bit_buffer: & mut String) {
+fn encode_data(qrcode: &QRCode, bit_buffer: &mut String) {
     match qrcode.encoding {
         QREncoding::Numeric => {
             let scaled_len = qrcode.raw_data.len() / 3;
@@ -412,12 +409,15 @@ fn encode_data(qrcode: & QRCode, bit_buffer: & mut String) {
             let left_over  = qrcode.raw_data.len() % 2;
 
             for i in 0..scaled_len {
-                let current_slice = &qrcode.raw_data[i..i+2];
-                encode_alphanumeric(bit_buffer, current_slice);
+                let current_slice = &qrcode.raw_data[i*2..(i+1)*2];
+                let encoded = encode_alphanumeric(current_slice);
+                bit_buffer.push_str(&encoded);
             }
 
             if left_over > 0 {
-                encode_alphanumeric(bit_buffer, &qrcode.raw_data[qrcode.raw_data.len() - left_over..qrcode.raw_data.len()])
+                let len = qrcode.raw_data.len();
+                let encoded = encode_alphanumeric(&qrcode.raw_data[len-1..len]);
+                bit_buffer.push_str(&encoded);
             }
         },
         QREncoding::Byte => {
@@ -439,20 +439,27 @@ impl QRCode {
             return Err(String::from("Data too long for encoding!"))
         }
 
+        let err_metadata = get_err_metadata(version, &error_correction).unwrap();
+
         Ok(QRCode {
             raw_data: data,
             encoding,
-            error_correction: error_correction,
+            error_correction,
             version,
+            err_metadata,
         })
     }
 
     pub fn encode(&self) -> Result<String, QRCodeError> {
         let mut bit_buffer = String::new();
 
-        add_encoding(self, & mut bit_buffer);
-        add_data_len(self, &mut bit_buffer)?;
-        encode_data(self, & mut bit_buffer);
+        let encoding = get_encoding(self);
+        bit_buffer.push_str(encoding);
+
+        let data_len = get_data_len(self)?;
+        bit_buffer.push_str(&data_len);
+
+        encode_data(self, &mut bit_buffer);
         add_padding(self, &mut bit_buffer)?;
         
         return Ok(bit_buffer);
@@ -465,7 +472,7 @@ impl QRCode {
 
         let mut coeffs = vec![0; chunks];
         for i in 0..chunks {
-            let byte = &bitbuf[i..(i+8)];
+            let byte = &bitbuf[i*8..(i + 1)*8];
             let coeff = u8::from_str_radix(byte, 2)
                                 .expect("This should be a valid bin string!");
             coeffs[i] = coeff;
