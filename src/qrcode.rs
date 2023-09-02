@@ -1,5 +1,7 @@
 use regex::Regex;
 
+use crate::solomon_reed::{get_generator_polynomial, nums_to_coeffs, mult_by_pow_of_x, get_poly_degree, pretty_print_polynomial_ints, get_code_words};
+
 // source: https://www.thonky.com/qr-code-tutorial/
 
 #[derive(Debug)]
@@ -365,7 +367,7 @@ fn get_data_len(qrcode: &QRCode) -> Result<String, QRCodeError> {
 
 fn add_padding(qrcode: &QRCode, bit_buffer: &mut String) -> Result<(), QRCodeError> {
     // get the maximum number of bits
-    let bit_size = qrcode.err_metadata.total_code_words();
+    let bit_size = qrcode.err_metadata.total_code_words() * 8;
     let missing_bits = bit_size - bit_buffer.len();
 
     // add terminator of 0s => at most four 0s
@@ -465,7 +467,7 @@ impl QRCode {
         return Ok(bit_buffer);
     }
 
-    pub fn get_coeffs(&self) -> Result<Vec<u8>, QRCodeError> {
+    pub fn get_coeffs(&self) -> Result<[u32; 255], QRCodeError> {
         let bitbuf = self.encode()?;
         assert!(bitbuf.len() % 8 == 0, "Bit buffer has invalid length that is not a multiple of 8.");
         let chunks = bitbuf.len() / 8;
@@ -478,6 +480,12 @@ impl QRCode {
             coeffs[i] = coeff;
         }
 
-        Ok(coeffs)
+        Ok(nums_to_coeffs(&coeffs))
+    }
+
+    pub fn gen_error_codewords(&self) -> Vec<u32>{
+        // these coefficients are powers of two
+        let mut message_poly_coeffs = self.get_coeffs().unwrap();
+        get_code_words(&mut message_poly_coeffs[..], self.err_metadata.words_per_block as u32)
     }
 }

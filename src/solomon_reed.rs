@@ -1,11 +1,14 @@
+const SENTINAL_EXP: u32 = 0xFFFFu32;
+const MAX_POLY_LEN: usize = 255;
 
 fn add_exp(a: u32, b: u32) -> u32 {
-    (a + b) % 255
+    if a == SENTINAL_EXP || b == SENTINAL_EXP { SENTINAL_EXP }
+    else { (a + b) % 255 }
 }
 
 fn int_to_exponent(value: u32) -> u32 {
     let int_to_exponent_lookup = vec![
-        0xFFFFu32, 0, 1, 25, 2, 50, 26, 198, 3, 223,
+        SENTINAL_EXP, 0, 1, 25, 2, 50, 26, 198, 3, 223,
         51, 238, 27, 104, 199, 75, 4, 100, 224, 14,
         52, 141, 239, 129, 28, 193, 105, 248, 200, 8,
         76, 113, 5, 138, 101, 47, 225, 36, 15, 33,
@@ -88,20 +91,19 @@ pub fn add_coeffs(coeff_power_a: u32, coeff_power_b: u32) -> u32 {
 
 // there can be at most 255 error correction code words
 // num_codewords has to be >= 7
-pub fn get_generator_polynomial(num_codewords: usize) -> Vec<u32> {
-
+pub fn get_generator_polynomial(num_codewords: u32) -> [u32; MAX_POLY_LEN] {
     // sentinal value for 0 coeff == 0xFFFF
-    let mut coeff_powers = vec![0xFFFFu32; 255];
+    let mut coeff_powers = [SENTINAL_EXP; MAX_POLY_LEN];
 
     // first polynomial => alpha^0 * x^2 + alpha^25 * x^1 + alpha^0 * x^0
     coeff_powers[0] = 0;
     coeff_powers[1] = 0;
 
     // in each step multiply by (x - alpha^i), i also represents the currently highest power of x
-    for i in 1..=(num_codewords - 1) {
+    for i in 1..=(num_codewords - 1) as usize {
         // shift current codewords one to the left and add the current codeword multiplied by alpha^i
-        let mut new_powers = vec![0xFFFFu32; 255];
-        for j in 0..=(i + 1) {
+        let mut new_powers = [SENTINAL_EXP; MAX_POLY_LEN];
+        for j in 0..=(i + 1) as usize {
             if j == i + 1 {
                 // alpha_j_n = 0
                 new_powers[j] = 0;
@@ -121,17 +123,102 @@ pub fn get_generator_polynomial(num_codewords: usize) -> Vec<u32> {
     return coeff_powers;
 }
 
-// for debugging purposes
-pub fn pretty_print_polynomial(exponents: Vec<u32>) {
-    let mut expoenent_of_x = 0;
-    while exponents[expoenent_of_x] != 0xFFFFu32 {
-        print!("alpha^{} * x^{}", exponents[expoenent_of_x], expoenent_of_x);
+pub fn mult_by_pow_of_x(pow: u32, coeffs: &mut [u32]) {
+    let mut new_coeffs = [SENTINAL_EXP; MAX_POLY_LEN];
 
-        expoenent_of_x += 1;
-        if exponents[expoenent_of_x] != 0xFFFFu32 {
-            print!(" + ");
+    for exp in (0..coeffs.len()).rev() {
+        let new_exp = add_exp(exp as u32, pow) as usize;
+        new_coeffs[new_exp] = coeffs[exp];
+    }
+
+    coeffs.copy_from_slice(&new_coeffs[..]);
+}
+
+// for debugging purposes
+pub fn pretty_print_polynomial_pows(exponents: &[u32]) {
+    for idx in (0..exponents.len()).rev() {
+        let exp = exponents[idx];
+        if exp != SENTINAL_EXP {
+            if idx != 0 {
+                print!("α^{} * x^{} + ", exp, idx);
+            } else {
+                print!("α^{}", exp);
+            }
         }
     }
 
     println!("");
+}
+
+pub fn pretty_print_polynomial_ints(exponents: &[u32]) {
+    for idx in (0..exponents.len()).rev() {
+        let exp = exponents[idx];
+        if exp != SENTINAL_EXP {
+            if idx != 0 {
+                print!("{} * x^{} + ", get_power_of_two(exp), idx);
+            } else {
+                print!("{}", get_power_of_two(exp));
+            }
+        }
+    }
+
+    println!("");
+}
+
+
+pub fn get_poly_degree(coeffs: &[u32]) -> u32 {
+    for i in (0..MAX_POLY_LEN).rev() {
+        if coeffs[i] != SENTINAL_EXP { return i as u32; }
+    }
+
+    0
+}
+
+pub fn nums_to_coeffs(nums: &[u8]) -> [u32; 255] {
+    // sentinal value for 0 coeff == 0xFFFF
+    let mut coeff_powers = [SENTINAL_EXP; 255];
+    
+
+    for i in 0..nums.len() {
+        coeff_powers[i] = int_to_exponent(nums[nums.len() - i - 1] as u32);
+    }
+
+    coeff_powers
+}
+
+pub fn get_code_words(msg_coeffs_pows: &mut [u32], num_codewords: u32) -> Vec<u32> {
+    mult_by_pow_of_x(num_codewords, &mut msg_coeffs_pows[..]);
+    
+    let gen_coeff_pows = get_generator_polynomial(num_codewords);
+    let mut curr_msg_deg = get_poly_degree(msg_coeffs_pows);
+    let gen_deg = num_codewords;
+    let num_iterations = curr_msg_deg - gen_deg;
+
+    let mut temp_gen_coeff_pows = [0xFFFFu32; MAX_POLY_LEN];
+
+    // perform the long division
+    for _ in 0..num_iterations+1 {
+        // make degree of gen poly and msg poly the same
+        temp_gen_coeff_pows[..].copy_from_slice(&gen_coeff_pows[..]);
+        mult_by_pow_of_x((curr_msg_deg - gen_deg) as u32, &mut temp_gen_coeff_pows[..]);
+
+        // multiply gen poly be leading coefficient of the msg poly
+        let leading = msg_coeffs_pows[curr_msg_deg as usize];
+        for i in 0..MAX_POLY_LEN {
+            temp_gen_coeff_pows[i] = add_exp(temp_gen_coeff_pows[i], leading);
+        }
+
+        // xor the coefficients
+        for i in 0..MAX_POLY_LEN {
+            msg_coeffs_pows[i] = add_coeffs(msg_coeffs_pows[i], temp_gen_coeff_pows[i]);
+        }
+
+        curr_msg_deg -= 1;
+    }
+
+    let mut codewords = Vec::with_capacity(curr_msg_deg as usize);
+    for i in (0..curr_msg_deg+1).rev() {
+        codewords.push(get_power_of_two(msg_coeffs_pows[i as usize]));
+    }
+    codewords
 }
